@@ -1,6 +1,7 @@
 // lib/main.dart
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(UniversalConverterApp());
 
@@ -331,6 +332,7 @@ class _ConverterPageState extends State<ConverterPage> {
   @override
   void initState() {
     super.initState();
+	_loadHistory();
     _fromUnitId = widget.category.units.first.id;
     _toUnitId = (widget.category.units.length > 1)
         ? widget.category.units[1].id
@@ -360,6 +362,16 @@ class _ConverterPageState extends State<ConverterPage> {
       _updatingFromResult = false;
     });
   }
+  void _loadHistory() async {
+  final prefs = await SharedPreferences.getInstance();
+  final savedHistory = prefs.getStringList('conversion_history');
+  if (savedHistory != null) {
+    setState(() {
+      _history.clear();
+      _history.addAll(savedHistory);
+    });
+  }
+}
 
   @override
   void dispose() {
@@ -416,14 +428,16 @@ class _ConverterPageState extends State<ConverterPage> {
     });
   }
 
-  void _addHistory(String entry) {
-    if (_history.isEmpty || _history.first != entry) {
-      setState(() {
-        _history.insert(0, entry);
-        if (_history.length > 12) _history.removeLast();
-      });
-    }
+  void _addHistory(String entry) async {
+  if (_history.isEmpty || _history.first != entry) {
+    setState(() {
+      _history.insert(0, entry);
+      if (_history.length > 12) _history.removeLast();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('conversion_history', _history);
   }
+}
 
   String _unitName(String id) {
     final u = widget.category.units
@@ -550,7 +564,16 @@ class _ConverterPageState extends State<ConverterPage> {
             ],
           ),
 
-          // You can add your history UI or HVAC helpers here as before...
+          Expanded(
+  child: ListView.builder(
+    itemCount: _history.length,
+    itemBuilder: (context, index) {
+      return ListTile(
+        title: Text(_history[index]),
+      );
+    },
+  ),
+),
         ],
       ),
     );
