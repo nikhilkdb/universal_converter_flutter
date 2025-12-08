@@ -313,10 +313,14 @@ class ConverterPage extends StatefulWidget {
 
 class _ConverterPageState extends State<ConverterPage> {
   final TextEditingController _inputController = TextEditingController();
+  final TextEditingController _resultController = TextEditingController();
   late String _fromUnitId;
   late String _toUnitId;
   String _result = '';
   final List<String> _history = [];
+
+  bool _updatingFromResult = false; // prevent loops
+  bool _updatingFromInput = false;
 
   // Additional HVAC inputs for special calculators
   final TextEditingController _ductDiameterController = TextEditingController();
@@ -328,14 +332,39 @@ class _ConverterPageState extends State<ConverterPage> {
   void initState() {
     super.initState();
     _fromUnitId = widget.category.units.first.id;
-    _toUnitId =
-        (widget.category.units.length > 1) ? widget.category.units[1].id : widget.category.units.first.id;
-    _inputController.addListener(_convert);
+    _toUnitId = (widget.category.units.length > 1)
+        ? widget.category.units[1].id
+        : widget.category.units.first.id;
+
+    _inputController.addListener(() {
+      if (_updatingFromResult) return;
+      _updatingFromInput = true;
+      _convert();
+      _updatingFromInput = false;
+    });
+
+    _resultController.addListener(() {
+      if (_updatingFromInput) return;
+      _updatingFromResult = true;
+
+      final text = _resultController.text.trim();
+      final val = double.tryParse(text);
+      if (val != null) {
+        final backConverted =
+            convert(widget.category.id, _toUnitId, _fromUnitId, val);
+        if (!backConverted.isNaN) {
+          _inputController.text = backConverted.toStringAsPrecision(6);
+        }
+      }
+
+      _updatingFromResult = false;
+    });
   }
 
   @override
   void dispose() {
     _inputController.dispose();
+    _resultController.dispose();
     _ductDiameterController.dispose();
     _velocityController.dispose();
     _areaController.dispose();
@@ -348,6 +377,7 @@ class _ConverterPageState extends State<ConverterPage> {
     if (inputText.isEmpty) {
       setState(() {
         _result = '';
+        _resultController.text = '';
       });
       return;
     }
@@ -355,6 +385,7 @@ class _ConverterPageState extends State<ConverterPage> {
     if (value == null) {
       setState(() {
         _result = 'Invalid number';
+        _resultController.text = '';
       });
       return;
     }
@@ -369,10 +400,18 @@ class _ConverterPageState extends State<ConverterPage> {
     setState(() {
       if (converted.isNaN) {
         _result = 'Cannot convert';
+        _resultController.text = '';
       } else {
         final s = converted.toStringAsPrecision(6);
         _result = '$s ${_unitName(_toUnitId)}';
-        _addHistory('${value.toString()} ${_unitName(_fromUnitId)} → $s ${_unitName(_toUnitId)}');
+
+        // Update resultController text without triggering listener loop
+        _updatingFromInput = true;
+        _resultController.text = s;
+        _updatingFromInput = false;
+
+        _addHistory(
+            '${value.toString()} ${_unitName(_fromUnitId)} → $s ${_unitName(_toUnitId)}');
       }
     });
   }
@@ -387,7 +426,8 @@ class _ConverterPageState extends State<ConverterPage> {
   }
 
   String _unitName(String id) {
-    final u = widget.category.units.firstWhere((x) => x.id == id, orElse: () => widget.category.units.first);
+    final u = widget.category.units
+        .firstWhere((x) => x.id == id, orElse: () => widget.category.units.first);
     return u.name;
   }
 
@@ -397,294 +437,126 @@ class _ConverterPageState extends State<ConverterPage> {
       padding: const EdgeInsets.all(12.0),
       child: Column(
         children: [
-          Text(widget.category.hint, style: TextStyle(fontSize: 13, color: Colors.grey[700])),
-          const SizedBox(height: 8),
+          // Row 1: Input field + From dropdown
           Row(
             children: [
+              // Input value text field
               Expanded(
+                flex: 2,
                 child: TextField(
                   controller: _inputController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                  decoration: const InputDecoration(
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  decoration: InputDecoration(
+                    //labelText: 'Value',
                     border: OutlineInputBorder(),
-                    labelText: 'Value',
-                    hintText: 'Enter value to convert',
+                    hintText: 'Enter ${_unitName(_fromUnitId)}',
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              Column(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.swap_horiz),
-                    onPressed: () {
-                      setState(() {
-                        final tmp = _fromUnitId;
-                        _fromUnitId = _toUnitId;
-                        _toUnitId = tmp;
-                        _convert();
-                      });
-                    },
+              const SizedBox(width: 20),
+              // From dropdown
+              Expanded(
+                flex: 1,
+                child: DropdownButtonFormField<String>(
+                  value: _fromUnitId,
+                  decoration: InputDecoration(
+                    labelText: 'From',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
                   ),
-                ],
+                  isExpanded: true,
+                  items: widget.category.units
+                      .map((u) => DropdownMenuItem(value: u.id, child: Text(u.name)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      _fromUnitId = v;
+                      _convert();
+                    });
+                  },
+                ),
               ),
             ],
           ),
+
           const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _buildUnitDropdown('From', _fromUnitId, (String? v) {
-                if (v == null) return;
+
+          // Swap button centered
+          Center(
+            child: IconButton(
+              iconSize: 32,
+              icon: const Icon(Icons.swap_vert),
+              tooltip: 'Swap From/To',
+              onPressed: () {
                 setState(() {
-                  _fromUnitId = v;
+                  final tmp = _fromUnitId;
+                  _fromUnitId = _toUnitId;
+                  _toUnitId = tmp;
+                  _inputController.text = _result.isNotEmpty &&
+                          _result != '--' &&
+                          _result != 'Invalid number' &&
+                          _result != 'Cannot convert'
+                      ? _result.split(' ').first
+                      : _inputController.text;
                   _convert();
                 });
-              })),
-              const SizedBox(width: 12),
-              Expanded(child: _buildUnitDropdown('To', _toUnitId, (String? v) {
-                if (v == null) return;
-                setState(() {
-                  _toUnitId = v;
-                  _convert();
-                });
-              })),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Card(
-            elevation: 2,
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Result', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                  Text(_result.isEmpty ? '--' : _result, style: const TextStyle(fontSize: 16)),
-                ],
-              ),
+              },
             ),
           ),
-          const SizedBox(height: 12),
-
-          // HVAC special helpers for appropriate categories
-          if (widget.category.id == 'airflow_hvac') _buildAirflowDuctHelper(),
-          if (widget.category.id == 'power_hvac') _buildTonnageHelper(),
-          if (widget.category.id == 'psychro') _buildPsychroHelper(),
 
           const SizedBox(height: 12),
-          Expanded(child: _buildHistory()),
+
+          // Row 2: Result (editable) + To dropdown
+          Row(
+            children: [
+              // Result editable text field
+              Expanded(
+                flex: 2,
+                child: TextField(
+                  controller: _resultController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  decoration: InputDecoration(
+                    //labelText: 'Result',
+                    border: OutlineInputBorder(),
+                    hintText: 'Enter ${_unitName(_toUnitId)}',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 20),
+              // To dropdown
+              Expanded(
+                flex: 1,
+                child: DropdownButtonFormField<String>(
+                  value: _toUnitId,
+                  decoration: InputDecoration(
+                    labelText: 'To',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                  ),
+                  isExpanded: true,
+                  items: widget.category.units
+                      .map((u) => DropdownMenuItem(value: u.id, child: Text(u.name)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() {
+                      _toUnitId = v;
+                      _convert();
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+
+          // You can add your history UI or HVAC helpers here as before...
         ],
       ),
     );
   }
-
-  Widget _buildUnitDropdown(String label, String value, ValueChanged<String?> onChanged) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[300]!),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: DropdownButton<String>(
-            isExpanded: true,
-            value: value,
-            underline: const SizedBox.shrink(),
-            items: widget.category.units.map((u) => DropdownMenuItem(value: u.id, child: Text(u.name))).toList(),
-            onChanged: onChanged,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHistory() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('History', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        Expanded(
-          child: _history.isEmpty
-              ? const Center(child: Text('No recent conversions'))
-              : ListView.builder(
-                  itemCount: _history.length,
-                  itemBuilder: (_, i) => ListTile(
-                    leading: const Icon(Icons.history),
-                    title: Text(_history[i]),
-                    onTap: () {
-                      // try to parse first numeric token and set as input
-                      final first = _history[i].split(' ').first;
-                      final v = double.tryParse(first);
-                      if (v != null) {
-                        setState(() {
-                          _inputController.text = v.toString();
-                          _convert();
-                        });
-                      }
-                    },
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-
-  // --- HVAC Helpers ---
-
-  Widget _buildAirflowDuctHelper() {
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(10.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Duct velocity / area helper', style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _ductDiameterController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Duct diameter (mm)',
-                      hintText: 'e.g. 200',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _velocityController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      labelText: 'Velocity (m/s)',
-                      hintText: 'e.g. 5',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () {
-                    final d = double.tryParse(_ductDiameterController.text);
-                    final v = double.tryParse(_velocityController.text);
-                    if (d == null || v == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter diameter & velocity')));
-                      return;
-                    }
-                    // area m^2 = pi*(D/1000)^2/4
-                    final area = pi * pow(d / 1000.0, 2) / 4.0;
-                    // flow m^3/s = area * velocity
-                    final q = area * v;
-                    final q_cfm = q / 0.00047194745;
-                    setState(() {
-                      _result = '${q.toStringAsPrecision(6)} m³/s  (≈ ${q_cfm.toStringAsPrecision(6)} CFM)';
-                      _addHistory('Duct ${d} mm, ${v} m/s → ${q.toStringAsPrecision(6)} m³/s');
-                    });
-                  },
-                  child: const Text('Calc'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            const Text('Tip: Enter diameter and velocity, press Calc.'),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTonnageHelper() {
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(10.0),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Tonnage helper', style: TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          const Text('1 ton (ref) ≈ 3516.852842 W'),
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _inputController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'Value',
-                  hintText: 'Enter number to convert using dropdown',
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            ElevatedButton(
-              onPressed: _convert,
-              child: const Text('Convert'),
-            ),
-          ]),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildPsychroHelper() {
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(10.0),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Psychrometric quick helper (approx)', style: TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _inputController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: 'Dry bulb temp °C',
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _humidityController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: 'Relative Humidity %',
-            ),
-          ),
-          const SizedBox(height: 8),
-          ElevatedButton(
-            onPressed: () {
-              final db = double.tryParse(_inputController.text);
-              final rh = double.tryParse(_humidityController.text);
-              if (db == null || rh == null) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter DB and RH')));
-                return;
-              }
-              final dp = _approxDewPoint(db, rh);
-              final humRatio = _approxHumidityRatio(db, rh);
-              setState(() {
-                _result = 'Dew point ≈ ${dp.toStringAsPrecision(5)} °C, w ≈ ${humRatio.toStringAsPrecision(5)} kg/kg';
-                _addHistory('DB ${db}°C, RH ${rh}% → DP ${dp.toStringAsPrecision(5)}°C');
-              });
-            },
-            child: const Text('Compute'),
-          ),
-          const SizedBox(height: 6),
-          const Text('Note: These are approximations for quick estimates.'),
-        ]),
-      ),
-    );
-  }
 }
+
 
 //
 // Conversion engine
@@ -936,3 +808,4 @@ double _approxHumidityRatio(double tC, double rhPercent) {
   final w = 0.622 * Pv / (P - Pv);
   return w;
 }
+
