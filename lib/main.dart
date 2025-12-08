@@ -442,7 +442,7 @@ class _ConverterPageState extends State<ConverterPage> {
             children: [
               // Input value text field
               Expanded(
-                flex: 2,
+                flex: 1,
                 child: TextField(
                   controller: _inputController,
                   keyboardType:
@@ -512,7 +512,7 @@ class _ConverterPageState extends State<ConverterPage> {
             children: [
               // Result editable text field
               Expanded(
-                flex: 2,
+                flex: 1,
                 child: TextField(
                   controller: _resultController,
                   keyboardType:
@@ -808,4 +808,3 @@ double _approxHumidityRatio(double tC, double rhPercent) {
   final w = 0.622 * Pv / (P - Pv);
   return w;
 }
-
